@@ -980,8 +980,9 @@ fi</code></pre></div>
         <li>☐ 用量 80% 告警已设置并测试触发</li>
         <li>☐ 反向代理只暴露入口，内部端口无外网可达</li>
         <li>☐ 客户端接入实测：用带工具集的真实 Agent 发一次请求，确认无 400 且日志显示正确的 base_url 与模型名</li>
+        <li><a href="#appendix-register">附錄 B：帳戶自動化註冊實戰</a></li>
       </ul>
-    </div>
+      </div>
 
     <h3 class="sub">11.4 参考链接</h3>
     <div class="link-block">
@@ -996,6 +997,48 @@ fi</code></pre></div>
     </div>
 
     <div class="tip cyan"><strong>💬 最后一句：</strong>Pool 部署好之后，记得定时看监控——Key 会失效、配额会打满，但只要你个告警在度，就永远不会「死得无声无色」。祝部署顺利，少踩坑！</div>
+  </div>
+
+  <!-- 附錄 B：帳戶自動化註冊實戰 -->
+  <div id="appendix-register" class="section">
+    <h2>附錄 B：帳戶自動化註冊實戰</h2>
+    <p class="intro">本附錄補充「如何有效自動創建 Grok 帳戶」及建議頻率，供需要長期維持池規模的使用者參考。所有指令與腳本均以 2026-08-06 實測為準。</p>
+
+    <h3 class="sub">B.1 每日兩批註冊機制</h3>
+    <ul class="body-list">
+      <li><strong>建議頻率</strong>：每日 04:00 及 16:00 各執行一批，每批註冊 5–10 個帳戶。</li>
+      <li><strong>理由</strong>：xAI 風控有時段波動，早晨及傍晚註冊成功率較高；單日新增 10–20 個帳戶既能維持池的廣度，又不會一次註冊過多觸發審查。</li>
+      <li><strong>自動化腳本</strong>：<code>cron-batch.sh</code>（包裝 <code>grok-pool-register.sh</code> + 匯入）。</li>
+    </ul>
+
+    <div class="code-wrap">
+      <div class="code-head"><span>~/.hermes/scripts/grok-pool-batch.sh</span><button class="copy-btn">复制</button></div>
+      <pre><code>#!/bin/bash
+# 由 Hermes cron 呼叫，預設每批 5 個
+exec /home/ubuntu/grok-pool/cron-batch.sh "${@:-5}"</code></pre>
+    </div>
+
+    <h3 class="sub">B.2 重要修復與踩坑</h3>
+    <div class="faq-item">
+      <div class="q">❌ <code>tr -d '\r\n'</code> 會把多個 token 連成一行</div>
+      <div class="a">✅ 只去 <code>\r</code>（保留 <code>\n</code> 分隔）：<br>
+      <code>sed -i 's/\r$//' accounts_*.txt</code></div>
+    </div>
+    <div class="faq-item">
+      <div class="q">❌ cron 環境找不到 Chromium</div>
+      <div class="a">✅ <code>browser_runtime.py</code> 加入常見路徑掃描（同 <code>cpa_xai/browser_session.py</code> 做法）。</div>
+    </div>
+
+    <h3 class="sub">B.3 保養與重啟流程</h3>
+    <ul class="body-list">
+      <li><strong>hermes 更新後</strong>：執行 <code>python3 ~/grok-pool/reapply-picker-patch.py</code>（冪等）。</li>
+      <li><strong>gateway 重啟</strong>：<code>systemd-run --user --on-active=90s --unit=grok-restart bash ~/grok-pool/restart-gateway.sh</code>（已修正 PATH 與 venv python）。</li>
+    </ul>
+
+    <h3 class="sub">B.4 配額觀察與暫停機制</h3>
+    <p>當 console 配額接近 80% 時，建議暫停新增批次 48 小時，觀察現有帳戶的實際消耗。健康監察頁會在配額 gauge 顯示警戒線。</p>
+
+    <div class="tip yellow"><strong>⚠️ 注意</strong>：xAI 服務條款是否允許 Key 共享／轉售，請自行確認法律風險。本附錄僅描述技術實現。</div>
   </div>
 
   <div class="footer">
