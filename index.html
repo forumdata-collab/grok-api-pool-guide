@@ -1038,6 +1038,35 @@ exec /home/ubuntu/grok-pool/cron-batch.sh "${@:-5}"</code></pre>
     <h3 class="sub">B.4 配額觀察與暫停機制</h3>
     <p>當 console 配額接近 80% 時，建議暫停新增批次 48 小時，觀察現有帳戶的實際消耗。健康監察頁會在配額 gauge 顯示警戒線。</p>
 
+    <h3 class="sub">B.5 完整自動化指令速查（含 placeholder）</h3>
+    <div class="code-wrap">
+      <div class="code-head"><span>設定每日兩批 cron（04:00 / 16:00）</span><button class="copy-btn">复制</button></div>
+      <pre><code>(crontab -l 2>/dev/null; echo ""; echo "# Grok 帳戶自動註冊批次"; \
+echo "0 4 * * * /home/YOUR_USERNAME/.hermes/scripts/grok-pool-batch.sh 5"; \
+echo "0 16 * * * /home/YOUR_USERNAME/.hermes/scripts/grok-pool-batch.sh 5") | crontab -</code></pre>
+    </div>
+
+    <div class="code-wrap">
+      <div class="code-head"><span>手動執行一批（例如 5 個帳戶）</span><button class="copy-btn">复制</button></div>
+      <pre><code>cd /home/YOUR_USERNAME/grok-pool && ./cron-batch.sh 5</code></pre>
+    </div>
+
+    <div class="code-wrap">
+      <div class="code-head"><span>檢查最新一批 log</span><button class="copy-btn">复制</button></div>
+      <pre><code>ls -t ~/grok-pool/logs/batch_*.log | head -1 | xargs tail -30</code></pre>
+    </div>
+
+    <div class="code-wrap">
+      <div class="code-head"><span>hermes 更新後重裝 picker patch</span><button class="copy-btn">复制</button></div>
+      <pre><code>python3 /home/YOUR_USERNAME/grok-pool/reapply-picker-patch.py</code></pre>
+    </div>
+
+    <div class="code-wrap">
+      <div class="code-head"><span>重啟 gateway（systemd-run）</span><button class="copy-btn">复制</button></div>
+      <pre><code>systemd-run --user --on-active=90s --unit=grok-restart \
+bash /home/YOUR_USERNAME/grok-pool/restart-gateway.sh</code></pre>
+    </div>
+
     <div class="tip yellow"><strong>⚠️ 注意</strong>：xAI 服務條款是否允許 Key 共享／轉售，請自行確認法律風險。本附錄僅描述技術實現。</div>
   </div>
 
