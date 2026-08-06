@@ -981,6 +981,7 @@ fi</code></pre></div>
         <li>☐ 反向代理只暴露入口，内部端口无外网可达</li>
         <li>☐ 客户端接入实测：用带工具集的真实 Agent 发一次请求，确认无 400 且日志显示正确的 base_url 与模型名</li>
         <li><a href="#appendix-register">附錄 B：帳戶自動化註冊實戰</a></li>
+        <li><a href="#appendix-tg">附錄 C：将 Grok API Key 接入 Telegram 的注意事项</a></li>
       </ul>
       </div>
 
@@ -1068,6 +1069,49 @@ bash /home/YOUR_USERNAME/grok-pool/restart-gateway.sh</code></pre>
     </div>
 
     <div class="tip yellow"><strong>⚠️ 注意</strong>：xAI 服務條款是否允許 Key 共享／轉售，請自行確認法律風險。本附錄僅描述技術實現。</div>
+  </div>
+
+  <div class="section" id="appendix-tg">
+    <h2>附錄 C：将 Grok API Key 接入 Telegram 的注意事项</h2>
+    <p class="intro">把 Grok API Key 接入 Telegram bot（或通过任何 Telegram 渠道传递 Key）之前，先读完这一节。核心原则只有一条：<strong>Key 一旦出现在任何 Telegram 聊天记录里，就按已泄露处理。</strong>以下为 2026-08-06 实测整理。</p>
+
+    <h3 class="sub">C.1 Key 永远不要出现在聊天记录中</h3>
+    <ul class="body-list">
+      <li><strong>聊天记录会保存</strong>：Telegram 私聊、群组记录保存在官方服务器并支持多端同步，删除也无法彻底清除；Key 一旦发出，就视为泄露。</li>
+      <li><strong>不要通过 Telegram 传 Key</strong>：不要粘贴明文、不要发截图；不要让 bot 的 <code>/help</code>、<code>/keys</code> 等指令回显 Key 或配置内容。</li>
+      <li><strong>错误消息要脱敏</strong>：请求失败时若把完整请求头/URL 打到聊天里，Authorization 里的 Key 也会跟着泄露。错误处理只输出状态码与占位符。</li>
+    </ul>
+
+    <h3 class="sub">C.2 用文件/环境变量保存，不硬编码</h3>
+    <ul class="body-list">
+      <li>Key 放 <code>.env</code>（<code>chmod 600</code>）或环境变量，代码里用 <code>os.environ</code> 读取；仓库里只放带 <code>YOUR_XAI_API_KEY</code> 占位符的模板。</li>
+      <li><code>.env</code> 与 <code>bot_token</code> 一并加入 <code>.gitignore</code>，提交前 <code>git status</code> 确认没有密钥文件。</li>
+      <li>bot token 与 Grok Key 分开存放、分开轮换；两者同属机密，级别一样。</li>
+    </ul>
+
+    <h3 class="sub">C.3 推荐做法：Key 收在网关后面，bot 只连网关</h3>
+    <ul class="body-list">
+      <li>bot 的 <code>base_url</code> 指向你的 Pool 网关（LiteLLM Proxy 或自建 gateway），不要直连 <code>api.x.ai</code>；网关负责多 Key 轮询与熔断，bot 只持有网关地址。</li>
+      <li>网关入口开启鉴权（Master Key / Basic Auth），bot 只拿一个网关凭据，池里所有 Key 对 bot 不可见。</li>
+      <li>好处：单个 Key 泄露面缩小；bot 配置迁移只改网关地址；配额与用量在网关一侧集中统计。</li>
+    </ul>
+
+    <h3 class="sub">C.4 接入前检查清单</h3>
+    <ul class="body-list">
+      <li>☐ 发一条真实测试消息，确认返回无 400，日志里 base_url 指向网关、模型名正确</li>
+      <li>☐ grep 日志确认没有 <code>Authorization</code> / Key 明文</li>
+      <li>☐ bot 限定白名单 <code>chat_id</code>，避免公开 bot 被他人调用消耗你的配额</li>
+      <li>☐ 确认 <code>.env</code> 已 <code>chmod 600</code> 且入 <code>.gitignore</code></li>
+    </ul>
+
+    <h3 class="sub">C.5 泄露处置</h3>
+    <ul class="body-list">
+      <li>Key 若曾出现在聊天记录、日志、截图或第三方服务：立即到 <code>console.x.ai</code> 吊销并创建新 Key，旧 Key 同步从池中移除（LiteLLM key 列表 / gateway 配置）。</li>
+      <li>排查 bot 与网关日志确认泄露范围与时间；若 bot token 也疑似泄露，用 <code>@BotFather</code> 的 <code>/revoke</code> 重置。</li>
+      <li>轮换后重新跑一遍 C.4 清单再上线。</li>
+    </ul>
+
+    <div class="tip red"><strong>一句话总结</strong>：Key 收在网关、bot 只认网关地址；任何出现在聊天记录里的 Key 一律按泄露处理，立即吊销轮换。</div>
   </div>
 
   <div class="footer">
