@@ -134,6 +134,17 @@ html[data-theme="light"] .footer a{color:rgba(35,40,56,0.4)}
 .footer a:hover{color:rgba(255,255,255,0.5)}
 html[data-theme="light"] .footer a:hover{color:rgba(35,40,56,0.6)}
 
+/* 返回頂部（參考家族頁面標準 pattern） */
+#backToTop{position:fixed;bottom:24px;right:24px;width:48px;height:48px;border-radius:50%;background:var(--teal);color:#06231f;border:none;font-size:20px;font-weight:700;cursor:pointer;z-index:9999;box-shadow:0 4px 12px rgba(0,0,0,.35);display:none;transition:opacity .3s,transform .3s}
+#backToTop:hover{transform:translateY(-3px)}
+#backToTop.show{display:block}
+
+/* ko-fi 底部欄（Kofi Footbar：獨立欄，最後一個元素） */
+.kofi-bar{text-align:center;padding:26px 20px 34px;margin-top:28px;border-top:2px solid rgba(255,255,255,0.08);background:var(--card);color:var(--dim);font-size:13px}
+.kofi-bar p{margin:0 0 14px}
+.kofi-bar a{display:inline-flex;align-items:center;gap:10px;padding:12px 28px;background:#ff5e5b;color:#fff;text-decoration:none;border-radius:8px;font-weight:600;font-size:15px}
+.kofi-bar a:hover{filter:brightness(1.08)}
+
 @media(max-width:640px){
   .container{padding:20px 16px 60px}
   .hero h1{font-size:26px}
@@ -990,8 +1001,14 @@ fi</code></pre></div>
   <div class="footer">
     <p>Grok API Pool 部署指南 · 实战踩坑笔记 · MIT License · <a href="https://docs.x.ai" target="_blank" rel="noopener">xAI Docs</a></p>
     <p style="margin-top:4px">最后实测：2026-08-06 · 所有敏感数据均已占位符化，请自行替换</p>
+    <div class="kofi-bar">
+      <p>喜欢这份指南？请我饮杯咖啡 ☕</p>
+      <a href="https://ko-fi.com/forumdata" target="_blank" rel="noopener">☕ 请我饮咖啡</a>
+    </div>
   </div>
 </div>
+
+<button id="backToTop" aria-label="返回顶部" title="返回顶部">▲</button>
 
 <script>
 (function () {
@@ -1032,6 +1049,13 @@ fi</code></pre></div>
       }
     });
   });
+
+  // ── 返回顶部 ──
+  var btt = document.getElementById('backToTop');
+  window.addEventListener('scroll', function () {
+    btt.classList.toggle('show', window.scrollY > 600);
+  }, { passive: true });
+  btt.addEventListener('click', function () { window.scrollTo({ top: 0, behavior: 'smooth' }); });
 })();
 </script>
 </body>
