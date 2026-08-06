@@ -982,6 +982,7 @@ fi</code></pre></div>
         <li>☐ 客户端接入实测：用带工具集的真实 Agent 发一次请求，确认无 400 且日志显示正确的 base_url 与模型名</li>
         <li><a href="#appendix-register">附錄 B：帳戶自動化註冊實戰</a></li>
         <li><a href="#appendix-tg">附錄 C：将 Grok API Key 接入 Telegram 的注意事项</a></li>
+        <li><a href="#appendix-monitor">附錄 D：监控与告警实战（零 API 成本）</a></li>
       </ul>
       </div>
 
@@ -1112,6 +1113,71 @@ bash /home/YOUR_USERNAME/grok-pool/restart-gateway.sh</code></pre>
     </ul>
 
     <div class="tip red"><strong>一句话总结</strong>：Key 收在网关、bot 只认网关地址；任何出现在聊天记录里的 Key 一律按泄露处理，立即吊销轮换。</div>
+  </div>
+
+  <div class="section" id="appendix-monitor">
+    <h2>附錄 D：监控与告警实战（零 API 成本）</h2>
+    <p class="intro">本附錄记录本指南配套的监控与告警方案：<strong>全部数据来自被动来源（网关自带审计账本 + 管理 API + 本地 SQLite），不消耗任何上游配额</strong>。仪表板：<a href="https://forumdata-collab.github.io/system-monitor/" target="_blank" rel="noopener">system-monitor</a>。2026-08-06 实测。</p>
+
+    <h3 class="sub">D.1 监控架构</h3>
+    <ul class="body-list">
+      <li><strong>每 1 分钟</strong>：collector 检查 <code>/healthz</code>（免费），聚合审计统计，写入 <code>status.json</code>（nginx 静态目录公开，仪表板每 60 秒 fetch）。</li>
+      <li><strong>每 30 分钟</strong>：一次真实 chat probe（<code>max_tokens=10</code>）验证端到端推理 —— 这是唯一消耗配额的探针，一天约 48 次，远低于单日配额。</li>
+      <li><strong>每 5 分钟</strong>：watchdog 读 status.json，异常才发 Telegram，健康时完全静默。</li>
+      <li><strong>每 1 小时</strong>：历史趋势追加一点到本地 SQLite（<code>pool_history.db</code>），仪表板展示最近 48 小时曲线。</li>
+    </ul>
+
+    <h3 class="sub">D.2 被动审计统计（核心）</h3>
+    <p class="body">grok2api 自带审计账本 <code>request_audits</code> 表（SQLite，docker volume 内），每一条请求都记录 <code>status_code / error_code / duration_ms / first_token_ms / total_tokens / client_key_name / account_name</code>。collector 直接读表聚合，零上游成本：</p>
+    <ul class="body-list">
+      <li>近 1 小时 / 24 小时：请求数、成功率、错误率、状态码分布、错误码 Top（<code>upstream_rate_limited_resource_exhausted</code> 等）。</li>
+      <li>延迟：平均 / p95 <code>duration_ms</code>、p95 首 token 延迟。</li>
+      <li>按 client key 统计请求与错误（找出哪个客户端在烧配额）。</li>
+      <li>按账号统计 24h 错误（找出病号：某账号反复 429 / 上游不可用）。</li>
+      <li>账号健康表：<code>provider_accounts</code> 的 <code>auth_status / failure_count / cooldown_until / last_error</code>。</li>
+    </ul>
+
+    <h3 class="sub">D.3 防 spike / RPM 设置</h3>
+    <p class="body">通过管理 API 改运行参数（无需重启，<code>restartRequired: []</code>）。先 GET 拿全量配置与 revision，改完再 PUT：</p>
+    <div class="code-wrap">
+      <div class="code-head"><span>PUT /api/admin/v1/settings</span><button class="copy-btn">复制</button></div>
+      <pre><code># 1) 登录拿 token
+curl -X POST http://127.0.0.1:8001/api/admin/v1/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"username":"admin","password":"YOUR_ADMIN_PASSWORD"}'
+
+# 2) GET 全量配置（拿到 revision）
+# 3) 修改以下字段后再 PUT {"config": {...}, "revision": "0"}
+
+routing:
+  maxAttempts: 10        # 默认 999 —— 降级时 retry 风暴会打爆上游（429 雪崩）
+  capacityWait: 1.5s     # 默认 500ms —— 账号全忙时排队代替硬撞
+accounts:
+  autoCleanReauthEnabled: true   # 自动清理需要重新登录的死账号</code></pre>
+    </div>
+    <ul class="body-list">
+      <li><strong>每 client key 限流</strong>：<code>clientKeyDefaults.rpmLimit=120 / maxConcurrent=8</code>，可逐 key 收紧。</li>
+      <li><strong>全局并发</strong>：<code>server.maxConcurrentRequests=1024</code>，过高可调低，让网关在负载时快速返回 429 而不是无限排队。</li>
+      <li><strong>绑定本机（最彻底）</strong>：若所有客户端与网关同机（<code>base_url: http://127.0.0.1:8001/v1</code>），把 <code>--listen 0.0.0.0:8001</code> 改为 <code>--listen 127.0.0.1:8001</code> 后 <code>docker compose up -d</code> —— 公网根本没有入口可以 spike，比任何边缘限流都干净。</li>
+    </ul>
+
+    <h3 class="sub">D.4 告警阈值（watchdog）</h3>
+    <div style="overflow-x:auto">
+      <table class="table">
+        <thead><tr><th>条件</th><th>阈值</th><th>说明</th></tr></thead>
+        <tbody>
+          <tr><td>网关挂</td><td><code>api_ok=false</code> 或 status.json 超过 180 秒</td><td>立即报警</td></tr>
+          <tr><td>1h 错误率爆升</td><td>错误率 &gt; 50% 且请求 ≥ 8</td><td>上游故障 / 风控</td></tr>
+          <tr><td>429 风暴</td><td>1h 内 429 ≥ 15</td><td>RPM 被限，检查账号与 maxAttempts</td></tr>
+          <tr><td>配额用尽</td><td><code>used_pct ≥ 80%</code></td><td>Console 配额预警</td></tr>
+          <tr><td>reauth 突增</td><td>reauth 账号 ≥ 8</td><td>批量掉登录，需重新导入</td></tr>
+          <tr><td>probe 失败</td><td>端到端探针返回失败</td><td>推理链路异常</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="body">防噪音设计：同一条件需<strong>连续 2 次检查</strong>成立才报警；同类报警 30 分钟内不重复；条件消失即重置计数。cron：<code>*/5 * * * * flock -n /tmp/grok-pool-watch.lock /usr/bin/python3 /home/YOUR_USERNAME/grok-pool/pool-watch.py</code>。</p>
+
+    <div class="tip yellow"><strong>⚠️ 安全提醒</strong>：collector / watchdog 脚本内含管理密码与本地路径，<strong>切勿原样发布到公开仓库</strong>；本文档所有示例均已使用占位符。仪表板数据经 nginx 公开，status.json 不包含任何密钥。</div>
   </div>
 
   <div class="footer">
