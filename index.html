@@ -425,6 +425,7 @@ done
 journalctl -u litellm -f --no-pager</code></pre></div>
 
     <div class="tip green"><strong>✅ 熔断测试（强烈建议做）：</strong>临时把一个 Key 改成错误值，重启后连续请求，日志应见到它失败 3 次 → 进入冷却 → 其他 Key 顶上；改回正确值后 60 秒自动恢复。这一步做过才算真正部署完成。</div>
+    <div class="tip info"><strong>💡 Agent 类客户端接入：</strong>客户端请求前会用 <code>/v1/models</code> 校验模型名，务必让对外模型名（<code>model_name</code>）与列表一致；若客户端工具集包含 <code>web_search</code> 而上游 console 通道会注入同名原生工具，需要在网关层去重，否则整个请求会被 400 拒绝（详见第 9 节）。</div>
   </div>
 
   <!-- 4. Nginx + Lua -->
@@ -824,6 +825,14 @@ if [ "$QUOTA" -lt "$THRESHOLD" ]; then
     -d "chat_id=YOUR_CHAT_ID" \
     -d "text=⚠️ Grok Key 剩余配额得 $QUOTA%"
 fi</code></pre></div>
+
+    <h3 class="sub">8.4 每分鐘狀態頁（探測節流）</h3>
+    <ul class="body-list">
+      <li><strong>页面每分钟刷新 ≠ 每分钟调上游</strong>：真实 chat 探测每 30~60 分钟一次即可，其余数据来自 admin API、配额窗口和网关日志；页面只展示最近一次探测结果</li>
+      <li><strong>静态 JSON + 定时任务 + 前端轮询</strong>：collector 每分钟生成 <code>status.json</code>，页面 <code>fetch('status.json?cb='+Date.now())</code> 每 60 秒拉一次；自托管页面（nginx 直出）能真正做到每分钟新鲜，GitHub Pages 因构建与 CDN 延迟通常滞后 1~2 分钟</li>
+      <li><strong>定时任务健壮性</strong>：cron 环境 PATH 极简，脚本内全部使用绝对路径，并用 <code>flock</code> 防止任务重叠；状态数据原子写入（tmp + mv），避免页面读到半截 JSON</li>
+    </ul>
+    <div class="tip cyan"><strong>💡 实操参考：</strong>本页配套的健康监控即按此模式实现——每 30 分钟一次真实探测 + 每分钟刷新状态数据，配额消耗可忽略。</div>
   </div>
 
   <!-- 9. 踩坑合集 -->
@@ -860,6 +869,30 @@ fi</code></pre></div>
       <p class="reason">🔍 原因：① 中间代理缓冲了 SSE 数据（Nginx 默认 <code>proxy_buffering on</code>）；② 读超时太短，SSE 长连接被掐断；③ 网关把流式请求当普通请求处理，等成个 body 先返回。</p>
       <p class="fix">✅ 解决：Nginx 加 <code>proxy_buffering off</code> + <code>proxy_read_timeout 300s</code>；LiteLLM 调大 <code>request_timeout</code>；自建网关确保 <code>stream: true</code> 走 StreamingResponse 直通，不要做重试（重试会打乱 SSE 顺序）。</p>
     </div>
+
+    <div class="faq-item">
+      <h4><span class="q-badge">Q</span>客户端（AI Agent / 集成工具）请求报 "Duplicate tool names: web_search"？</h4>
+      <p class="reason">🔍 原因：部分上游（例如 Grok console 通道）会<strong>自动注入原生 web_search 工具</strong>；如果客户端工具集自带同名 function 工具（Agent 类客户端几乎必然携带），上游会拒绝整个请求——<code>400 invalid-argument</code>。典型症状：普通 curl 测试正常，但接上 Agent 后所有请求 400 并静默降级到备用模型。</p>
+      <p class="fix">✅ 解决：① 在网关层过滤——把客户端发送的 function 版 <code>web_search</code> 转换为原生类型并去重（chenyme/grok2api 可修改 <code>convertChatTools</code> 后重新构建镜像，改完用独立 tag 部署以免被自动更新覆盖）；② 或让客户端对该模型禁用 <code>web_search</code> 工具；③ 自建网关则在转发前对工具列表去重。改完记得重启网关进程（长驻进程会缓存旧配置，见下一题）。</p>
+    </div>
+
+    <div class="faq-item">
+      <h4><span class="q-badge">Q</span>改完配置后请求仍然打到旧地址 / 旧模型？</h4>
+      <p class="reason">🔍 原因：① 长驻网关 / 代理进程在<strong>启动时缓存配置</strong>，修改 config 后未重启所以不生效；② 部分客户端的命令行参数（如 <code>-m / --model</code>）<strong>不做别名解析</strong>，直接把参数名当作模型名发送；③ 配置的模型名不在 <code>/v1/models</code> 列表内，客户端校验直接拒绝。</p>
+      <p class="fix">✅ 解决：① 修改配置后重启网关进程（<code>systemctl restart</code> 或 <code>docker compose up -d</code>）；② 别名用交互式命令切换（如 <code>/model 别名</code>），不要依赖 <code>-m</code> 参数；③ 先用 <code>curl /v1/models</code> 确认模型名真实存在，切换后核对日志中的 base_url 与模型名是否与预期一致。</p>
+    </div>
+
+    <div class="faq-item">
+      <h4><span class="q-badge">Q</span>cron 定时任务中浏览器启动失败（"browser executable file path cannot be found"）？</h4>
+      <p class="reason">🔍 原因：cron 环境 <code>PATH</code> 极简（通常只有 <code>/usr/bin:/bin</code>），浏览器自动化库（如 DrissionPage）的自动探测找不到可执行文件。手动执行正常、定时执行失败，九成是这个原因。</p>
+      <p class="fix">✅ 解决：① 在脚本内显式扫描常见浏览器路径并调用 <code>set_browser_path</code> 指定；② 创建符号链接 <code>/usr/bin/chromium → /usr/bin/chromium-browser</code>；③ 脚本内全部使用绝对路径，并用 <code>flock</code> 防止任务重叠。</p>
+    </div>
+
+    <div class="faq-item">
+      <h4><span class="q-badge">Q</span>健康监控每分钟探测一次，配额很快就打光？</h4>
+      <p class="reason">🔍 原因：真实 chat 探测会消耗配额；每分钟一次意味着每天 1440 次调用，会把 Pool 的总配额吃掉大半。</p>
+      <p class="fix">✅ 解决：探测节流——真实探测每 30~60 分钟一次即可；日常监控改读 admin API / 网关日志（请求数、错误数、配额窗口），页面只展示最近一次探测结果。页面每分钟刷新的是「状态数据」，不是「探测请求」。</p>
+    </div>
   </div>
 
   <!-- 10. 指令速查 -->
@@ -884,6 +917,9 @@ fi</code></pre></div>
           <tr><td><code>logrotate -f /etc/logrotate.d/litellm</code></td><td>手动触发日志轮替</td></tr>
           <tr><td><code>grep -rn "sk-" . --include="*.py" --include="*.yaml"</code></td><td>提交前自查有无泄漏真 Key</td></tr>
           <tr><td><code>sudo certbot --nginx -d your-domain.com</code></td><td>免费 HTTPS 证书一条龙</td></tr>
+          <tr><td><code>curl http://127.0.0.1:PORT/v1/models</code></td><td>确认对外模型名（客户端校验依据）</td></tr>
+          <tr><td><code>/model 别名</code>（客户端内交互命令）</td><td>切换模型别名（部分 CLI 的 <code>-m</code> 参数不做别名解析）</td></tr>
+          <tr><td><code>systemctl restart 网关 / docker compose up -d</code></td><td>修改配置后重启长驻网关进程使其生效</td></tr>
         </tbody>
       </table>
     </div>
@@ -932,6 +968,7 @@ fi</code></pre></div>
         <li>☐ 日志轮替已配置</li>
         <li>☐ 用量 80% 告警已设置并测试触发</li>
         <li>☐ 反向代理只暴露入口，内部端口无外网可达</li>
+        <li>☐ 客户端接入实测：用带工具集的真实 Agent 发一次请求，确认无 400 且日志显示正确的 base_url 与模型名</li>
       </ul>
     </div>
 
