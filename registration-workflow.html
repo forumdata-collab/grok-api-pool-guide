@@ -1,0 +1,220 @@
+<!DOCTYPE html>
+<html lang="zh-TW" data-theme="dark">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Grok 帳戶自動註冊完整流程 · Grok API Pool 指南</title>
+<style>
+:root{color-scheme:dark}
+:root[data-theme="light"]{--bg:#f8f9fc;--card:#fff;--text:#232838;--dim:#5f6a85;--border:rgba(35,40,56,.1);--teal:#0d9488;--green:#16a34a;--red:#dc2626;--yellow:#ca8a04}
+:root{--bg:#0b0f1a;--card:#171e2e;--text:#e6e9f0;--dim:#93a0bd;--border:rgba(255,255,255,.08);--teal:#14b8a6;--green:#22c55e;--red:#ef4444;--yellow:#eab308}
+*{box-sizing:border-box}
+body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Noto Sans TC",sans-serif;background:var(--bg);color:var(--text);line-height:1.6}
+.container{max-width:1100px;margin:0 auto;padding:20px 16px 60px}
+.header{display:flex;align-items:center;justify-content:space-between;margin-bottom:24px;flex-wrap:wrap;gap:12px}
+.header h1{margin:0;font-size:24px;font-weight:600}
+.header .meta{font-size:13px;color:var(--dim)}
+.section{margin-bottom:32px}
+h2{margin:0 0 16px;font-size:20px;font-weight:600;border-bottom:2px solid var(--border);padding-bottom:8px}
+h3{margin:24px 0 12px;font-size:16px;font-weight:600;color:var(--teal)}
+.intro{background:var(--card);border:1px solid var(--border);border-radius:12px;padding:20px;margin-bottom:24px}
+.step{background:var(--card);border:1px solid var(--border);border-radius:12px;padding:20px;margin-bottom:16px}
+.step-header{display:flex;align-items:center;gap:12px;margin-bottom:12px}
+.step-num{width:28px;height:28px;border-radius:50%;background:var(--teal);color:#06231f;display:flex;align-items:center;justify-content:center;font-weight:700;flex-shrink:0}
+.step h4{margin:0;font-size:15px}
+.file-list{background:#0a0e1a;border:1px solid var(--border);border-radius:8px;padding:12px 16px;margin:12px 0;font-size:13px}
+.file-list strong{color:var(--teal)}
+.code-wrap{margin:12px 0}
+.code-head{display:flex;align-items:center;justify-content:space-between;background:#0a0e1a;border:1px solid var(--border);border-bottom:none;border-radius:8px 8px 0 0;padding:8px 14px;font-size:12px;color:var(--dim)}
+pre{background:#0a0e1a;border:1px solid var(--border);border-radius:0 0 8px 8px;padding:14px;overflow-x:auto;font-size:13px;margin:0}
+.copy-btn{background:var(--card);border:1px solid var(--border);color:var(--text);padding:4px 10px;border-radius:6px;font-size:12px;cursor:pointer}
+.tip{background:var(--card);border-left:4px solid var(--teal);padding:14px 18px;margin:16px 0;border-radius:0 8px 8px 0}
+.tip.yellow{border-left-color:var(--yellow)}
+.footer{text-align:center;padding:24px 0 0;font-size:12px;color:var(--dim);border-top:1px solid var(--border);margin-top:40px}
+.kofi-bar{text-align:center;padding:20px 0 0;margin-top:20px;border-top:1px solid var(--border)}
+.kofi-bar a{display:inline-flex;align-items:center;gap:8px;padding:10px 24px;background:#ff5e5b;color:#fff;text-decoration:none;border-radius:8px;font-weight:600;font-size:14px}
+</style>
+</head>
+<body>
+<div class="container">
+  <div class="header">
+    <div>
+      <h1>Grok 帳戶自動註冊完整流程</h1>
+      <div class="meta">Grok API Pool 指南 · 附錄 B 詳細版</div>
+    </div>
+    <a href="https://forumdata-collab.github.io/grok-api-pool-guide/" style="color:var(--teal);text-decoration:none">← 返回主指南</a>
+  </div>
+
+  <div class="intro">
+    <p><strong>本頁完整說明「Grok 帳戶自動註冊系統」從 Cron 觸發到成功匯入 grok2api 的全流程。</strong></p>
+    <p>包含每個步驟執行的 script、讀寫檔案、瀏覽器自動化、郵件驗證、Token 提取、帳戶儲存與 Admin API 匯入。</p>
+  </div>
+
+  <div class="section">
+    <h2>整體流程架構</h2>
+    <pre><code>Cron (04:00 / 16:00)
+  ↓
+~/.hermes/scripts/grok-pool-batch.sh
+  ↓
+~/grok-pool/cron-batch.sh 5
+  ↓
+~/grok-pool/grok-pool-register.sh 5 1
+  ↓
+  ├─ 產生 accounts_*.txt
+  ├─ browser_runtime.py + DrissionPage（自動註冊 + 郵件驗證 + Token 提取）
+  ├─ 解析 Token 並呼叫 grok2api Admin API 匯入
+  └─ 寫入 logs/batch_*.log
+  ↓
+pool-status.py（每分鐘更新 status.json）
+  ↓
+儀表板顯示最新批次 + 配額</code></pre>
+  </div>
+
+  <div class="section">
+    <h2>完整端到端流程（12 步驟）</h2>
+
+    <div class="step">
+      <div class="step-header">
+        <div class="step-num">1</div>
+        <h4>Heremes Cron 觸發</h4>
+      </div>
+      <p><strong>執行檔</strong>：<code>~/.hermes/scripts/grok-pool-batch.sh</code></p>
+      <p>每日在 04:00 及 16:00 由 Hermes cron 機制啟動，預設每批註冊 5 個帳戶。</p>
+      <div class="file-list"><strong>讀取</strong>：無<br><strong>產生</strong>：無</div>
+    </div>
+
+    <div class="step">
+      <div class="step-header">
+        <div class="step-num">2</div>
+        <h4>批次包裝執行</h4>
+      </div>
+      <p><strong>執行檔</strong>：<code>~/grok-pool/cron-batch.sh</code></p>
+      <p>接收參數（預設 5），呼叫主註冊腳本，並將輸出寫入 log。</p>
+      <div class="file-list"><strong>讀取</strong>：無<br><strong>產生</strong>：<code>logs/cron_*.log</code></div>
+    </div>
+
+    <div class="step">
+      <div class="step-header">
+        <div class="step-num">3</div>
+        <h4>主註冊腳本啟動</h4>
+      </div>
+      <p><strong>執行檔</strong>：<code>~/grok-pool/grok-pool-register.sh</code></p>
+      <p>負責整個註冊流程的 orchestration，包含產生帳戶檔、呼叫瀏覽器自動化、解析 Token、呼叫 Admin API 匯入。</p>
+      <div class="file-list"><strong>讀取</strong>：config、環境變數<br><strong>產生</strong>：<code>accounts_YYYYMMDD_HHMMSS.txt</code></div>
+    </div>
+
+    <div class="step">
+      <div class="step-header">
+        <div class="step-num">4</div>
+        <h4>瀏覽器自動化註冊</h4>
+      </div>
+      <p><strong>執行檔</strong>：<code>~/grok-pool-register/browser_runtime.py</code> + <code>cpa_xai/browser_session.py</code></p>
+      <p>使用 DrissionPage 啟動 Chromium，前往 console.x.ai 進行註冊、處理郵件驗證、登入並提取 SSO Token。</p>
+      <div class="file-list"><strong>讀取</strong>：config.json、proxy 設定<br><strong>產生</strong>：瀏覽器 session、驗證郵件</div>
+    </div>
+
+    <div class="step">
+      <div class="step-header">
+        <div class="step-num">5</div>
+        <h4>郵件驗證處理</h4>
+      </div>
+      <p>瀏覽器自動化會自動打開郵件驗證連結（或模擬點擊），完成帳戶啟用。</p>
+    </div>
+
+    <div class="step">
+      <div class="step-header">
+        <div class="step-num">6</div>
+        <h4>登入與 Token 提取</h4>
+      </div>
+      <p>驗證成功後自動登入 console.x.ai，提取 SSO Token 存入 <code>accounts_*.txt</code> 的第 3 欄。</p>
+      <div class="file-list"><strong>產生</strong>：<code>accounts_*.txt</code>（格式：email ---- password ---- token）</div>
+    </div>
+
+    <div class="step">
+      <div class="step-header">
+        <div class="step-num">7</div>
+        <h4>解析帳戶檔</h4>
+      </div>
+      <p><code>grok-pool-register.sh</code> 讀取 <code>accounts_*.txt</code>，解析出 email / password / token。</p>
+    </div>
+
+    <div class="step">
+      <div class="step-header">
+        <div class="step-num">8</div>
+        <h4>grok2api Admin API 登入</h4>
+      </div>
+      <p>使用 admin 帳號登入 grok2api，取得 access token。</p>
+      <div class="file-list"><strong>POST</strong> <code>/api/admin/v1/auth/login</code></div>
+    </div>
+
+    <div class="step">
+      <div class="step-header">
+        <div class="step-num">9</div>
+        <h4>帳戶匯入 grok2api</h4>
+      </div>
+      <p>呼叫 Admin API 的 import endpoint，將 console 及 web 帳戶分別匯入。</p>
+      <div class="file-list"><strong>POST</strong> <code>/api/admin/v1/accounts/import</code>（multipart form）</div>
+    </div>
+
+    <div class="step">
+      <div class="step-header">
+        <div class="step-num">10</div>
+        <h4>寫入執行 Log</h4>
+      </div>
+      <p>所有輸出寫入 <code>logs/batch_*.log</code>，包含成功 / 失敗 / 匯入數量。</p>
+    </div>
+
+    <div class="step">
+      <div class="step-header">
+        <div class="step-num">11</div>
+        <h4>健康監察更新</h4>
+      </div>
+      <p><code>pool-status.py</code> 每分鐘執行，更新 <code>web/status.json</code>，包含最新批次與配額。</p>
+    </div>
+
+    <div class="step">
+      <div class="step-header">
+        <div class="step-num">12</div>
+        <h4>儀表板顯示</h4>
+      </div>
+      <p>系統監察頁每分鐘自動刷新，顯示最新批次結果與配額 gauge。</p>
+    </div>
+  </div>
+
+  <div class="section">
+    <h2>關鍵技術點</h2>
+    <div class="tip">
+      <strong>瀏覽器自動化</strong><br>
+      使用 DrissionPage + Chromium，自動處理註冊、郵件驗證、登入、Token 提取。cron 環境需額外掃描 Chromium 路徑。
+    </div>
+    <div class="tip">
+      <strong>帳戶儲存格式</strong><br>
+      <code>email ---- password ---- SSO_TOKEN</code>（三欄以 <code>----</code> 分隔）
+    </div>
+    <div class="tip">
+      <strong>grok2api Admin API 匯入</strong><br>
+      必須使用 multipart form 上傳檔案，raw body 會回 <code>invalidAuthFile</code>。
+    </div>
+  </div>
+
+  <div class="section">
+    <h2>各步驟對應原始碼檔案</h2>
+    <table style="width:100%;border-collapse:collapse;font-size:13px">
+      <tr style="background:var(--card)"><th style="padding:8px;text-align:left">步驟</th><th style="padding:8px;text-align:left">主要檔案</th></tr>
+      <tr><td style="padding:8px;border-top:1px solid var(--border)">1. Cron 觸發</td><td style="padding:8px;border-top:1px solid var(--border)"><code>~/.hermes/scripts/grok-pool-batch.sh</code></td></tr>
+      <tr><td style="padding:8px">2. 批次包裝</td><td style="padding:8px"><code>~/grok-pool/cron-batch.sh</code></td></tr>
+      <tr><td style="padding:8px">3. 主註冊腳本</td><td style="padding:8px"><code>~/grok-pool/grok-pool-register.sh</code></td></tr>
+      <tr><td style="padding:8px">4-6. 瀏覽器自動化</td><td style="padding:8px"><code>~/grok-pool-register/browser_runtime.py</code><br><code>~/grok-pool-register/cpa_xai/browser_session.py</code></td></tr>
+      <tr><td style="padding:8px">7-9. 解析與匯入</td><td style="padding:8px"><code>grok-pool-register.sh</code>（內建 Admin API 呼叫）</td></tr>
+      <tr><td style="padding:8px">10. Log 寫入</td><td style="padding:8px"><code>logs/batch_*.log</code></td></tr>
+      <tr><td style="padding:8px">11. 健康監察</td><td style="padding:8px"><code>~/grok-pool/pool-status.py</code></td></tr>
+    </table>
+  </div>
+
+  <div class="kofi-bar">
+    <a href="https://ko-fi.com/forumdata" target="_blank" rel="noopener">☕ 請我飲咖啡</a>
+  </div>
+  <div class="footer">資料來源：grok-pool / grok-pool-register 實測（2026-08-06）</div>
+</div>
+</body>
+</html>
