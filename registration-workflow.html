@@ -47,7 +47,7 @@ pre{background:#0a0e1a;border:1px solid var(--border);border-radius:0 0 8px 8px;
 
   <div class="intro">
     <p><strong>本頁完整說明「Grok 帳戶自動註冊系統」從 Cron 觸發到成功匯入 grok2api 的全流程。</strong></p>
-    <p>包含每個步驟執行的 script、讀寫檔案、瀏覽器自動化、郵件驗證、Token 提取、帳戶儲存與 Admin API 匯入。</p>
+    <p>包含每個步驟執行的 script、讀寫檔案、瀏覽器自動化、郵件驗證、Token 提取、帳戶儲存與 Admin API 匯入。最後補充 2026-08-07 實測後加入的智能調度工具鏈。</p>
   </div>
 
   <div class="section">
@@ -62,12 +62,16 @@ pre{background:#0a0e1a;border:1px solid var(--border);border-radius:0 0 8px 8px;
   ↓
   ├─ 產生 accounts_*.txt
   ├─ browser_runtime.py + DrissionPage（自動註冊 + 郵件驗證 + Token 提取）
-  ├─ 解析 Token 並呼叫 grok2api Admin API 匯入
+  ├─ 解析 Token 並呼叫 grok2api Admin API 匯入（僅 console，web 已停）
   └─ 寫入 logs/batch_*.log
   ↓
 pool-status.py（每分鐘更新 status.json）
   ↓
-儀表板顯示最新批次 + 配額</code></pre>
+儀表板顯示最新批次 + 配額
+  ↓
+smart_gateway.py（智能調度：熔斷 + 速率整形 + 降級鏈）
+  ↓
+poc_agent.py（端到端 ReAct 查詢）</code></pre>
   </div>
 
   <div class="section">
@@ -150,10 +154,11 @@ pool-status.py（每分鐘更新 status.json）
     <div class="step">
       <div class="step-header">
         <div class="step-num">9</div>
-        <h4>帳戶匯入 grok2api</h4>
+        <h4>帳戶匯入 grok2api（僅 console）</h4>
       </div>
-      <p>呼叫 Admin API 的 import endpoint，將 console 及 web 帳戶分別匯入。</p>
-      <div class="file-list"><strong>POST</strong> <code>/api/admin/v1/accounts/import</code>（multipart form）</div>
+      <p>呼叫 Admin API 的 import endpoint，將 SSO Token 匯入為 <strong>console 帳戶</strong>。</p>
+      <p><span class="tip-inline" style="color:var(--yellow)">⚠️ 2026-08-07 起停止匯入 web 帳戶</span>：實測發現 web 路線在資料中心 IP 會被 anti-bot 挑戰擋死（<code>plane:web stage:anti_bot_retry client_error</code>），註冊成本白花，且同一 team fingerprint 會拖慢 console 帳戶。現僅匯入 console（anti-bot 可繞過、能出真內容）。</p>
+      <div class="file-list"><strong>POST</strong> <code>/api/admin/v1/accounts/console/import</code>（multipart form）</div>
     </div>
 
     <div class="step">
@@ -178,6 +183,51 @@ pool-status.py（每分鐘更新 status.json）
         <h4>儀表板顯示</h4>
       </div>
       <p>系統監察頁每分鐘自動刷新，顯示最新批次結果與配額 gauge。</p>
+    </div>
+  </div>
+
+  <div class="section">
+    <h2>2026-08-07 實測：智能調度工具鏈（下半場）</h2>
+    <div class="tip">
+      <strong>背景 / Rationale</strong><br>
+      實測發現兩條硬性約束，決定池嘅使用方式：
+      <ul>
+        <li><strong>Team Fingerprint RPM 硬鎖</strong>：所有 console 帳戶共享同一 team 指紋，<code>grok-4.3</code> 上限約 60 RPM（log 可見 <code>upstream_team_model_rate_limited</code>，例如 actual=278 / limit=60）。<strong>加帳戶無法突破</strong>，只能靠隊列整形 + 降級。</li>
+        <li><strong>Web 路線在 DC IP 全滅</strong>：web 池（fast/auto）雖然有配額，但 anti-bot 擋死資料中心 IP，<code>grok-chat-fast</code> 回 <code>upstream_unavailable</code>。</li>
+      </ul>
+      因此正確策略 = <strong>「有限資源智能調度」</strong>：用正確的模型做正確的事，而非無限並行。
+    </div>
+    <div class="tip yellow">
+      <strong>重要發現：grok2api 支援原生 tool-calling</strong><br>
+      實測 <code>grok-4.3</code> 完整透傳 OpenAI <code>tools</code> 參數，回傳 <code>finish_reason:"tool_calls"</code> 及真實 function call JSON。<strong>唔需要手寫外層 planner / constrained prompting</strong>——Hermes 原生 agent loop 已經可以驅動池做真 agent。
+    </div>
+
+    <div class="step">
+      <div class="step-header"><div class="step-num">13</div><h4>智能調度閘道（smart_gateway.py）</h4></div>
+      <p><strong>執行檔</strong>：<code>~/grok-pool/tools/smart_gateway.py</code></p>
+      <p>三合一閘道：<strong>熔斷器</strong>（連續 3 次故障自動 OPEN，429 唔當故障）+ <strong>Token Bucket 速率整形</strong>（premium 60 RPM / standard 100 RPM）+ <strong>智能路由</strong>（tier 分類 → 模型選擇 → 降級鏈）。</p>
+      <div class="file-list"><strong>命令</strong>：<code>python3 smart_gateway.py check</code>（健康檢查）· <code>route "問題"</code>（路由測試）· <code>ask "問題"</code>（端到端）<br><strong>讀取</strong>：<code>GROK_POOL_API_KEY</code>、模型池定義<br><strong>降級鏈</strong>：light→4.20-non-reasoning → 4.3 → 4.5；heavy→4.3 → 4.5 → 4.20</div>
+    </div>
+
+    <div class="step">
+      <div class="step-header"><div class="step-num">14</div><h4>端到端 ReAct PoC（poc_agent.py）</h4></div>
+      <p><strong>執行檔</strong>：<code>~/grok-pool/tools/poc_agent.py</code></p>
+      <p>示範池可以驅動工具做「真 agent」：Grok 揀工具（<code>search</code> / <code>parse_page</code>）→ 外層 Python 執行（DuckDuckGo + 純文本抽取）→ 回傳結果 → Grok 給最終答案。實測「香港今日新聞三大事件」成功輸出附來源連結嘅完整答案。</p>
+      <div class="file-list"><strong>命令</strong>：<code>python3 poc_agent.py "問題"</code></div>
+    </div>
+
+    <div class="step">
+      <div class="step-header"><div class="step-num">15</div><h4>429 / 熔斷即時監控（gateway_monitor.py）</h4></div>
+      <p><strong>執行檔</strong>：<code>~/grok-pool/tools/gateway_monitor.py</code></p>
+      <p>透過 docker exec 查 <code>request_audits</code> 表 + docker logs，即時統計 429 率、console 枯竭數、team fingerprint RPM 鎖狀態。</p>
+      <div class="file-list"><strong>命令</strong>：<code>python3 gateway_monitor.py</code>（簡潔狀態）· <code>--json</code>（詳細）· <code>--watch</code>（每 60s）</div>
+    </div>
+
+    <div class="step">
+      <div class="step-header"><div class="step-num">16</div><h4>驗收測試（verify_phase1.py）</h4></div>
+      <p><strong>執行檔</strong>：<code>~/grok-pool/tools/verify_phase1.py</code></p>
+      <p>8 項單元測試，唔打真實 API：熔斷器行為（429 唔熔斷 / 3 次故障 OPEN / 退避恢復）、Token Bucket 60 RPM 整形、分類器準確率、路由唔 crash。</p>
+      <div class="file-list"><strong>命令</strong>：<code>python3 verify_phase1.py</code>（期望 8/8 通過）</div>
     </div>
   </div>
 
@@ -208,13 +258,17 @@ pool-status.py（每分鐘更新 status.json）
       <tr><td style="padding:8px">7-9. 解析與匯入</td><td style="padding:8px"><code>grok-pool-register.sh</code>（內建 Admin API 呼叫）</td></tr>
       <tr><td style="padding:8px">10. Log 寫入</td><td style="padding:8px"><code>logs/batch_*.log</code></td></tr>
       <tr><td style="padding:8px">11. 健康監察</td><td style="padding:8px"><code>~/grok-pool/pool-status.py</code></td></tr>
+      <tr><td style="padding:8px">13. 智能調度閘道</td><td style="padding:8px"><code>~/grok-pool/tools/smart_gateway.py</code></td></tr>
+      <tr><td style="padding:8px">14. 端到端 ReAct</td><td style="padding:8px"><code>~/grok-pool/tools/poc_agent.py</code></td></tr>
+      <tr><td style="padding:8px">15. 429 監控</td><td style="padding:8px"><code>~/grok-pool/tools/gateway_monitor.py</code></td></tr>
+      <tr><td style="padding:8px">16. 驗收測試</td><td style="padding:8px"><code>~/grok-pool/tools/verify_phase1.py</code></td></tr>
     </table>
   </div>
 
   <div class="kofi-bar">
     <a href="https://ko-fi.com/forumdata" target="_blank" rel="noopener">☕ 請我飲咖啡</a>
   </div>
-  <div class="footer">資料來源：grok-pool / grok-pool-register 實測（2026-08-06）</div>
+  <div class="footer">資料來源：grok-pool / grok-pool-register 實測（2026-08-07）</div>
 </div>
 </body>
 </html>
