@@ -1070,6 +1070,17 @@ bash /home/YOUR_USERNAME/grok-pool/restart-gateway.sh</code></pre>
     </div>
 
     <div class="tip yellow"><strong>⚠️ 注意</strong>：xAI 服務條款是否允許 Key 共享／轉售，請自行確認法律風險。本附錄僅描述技術實現。</div>
+
+    <h3 class="sub">B.6 完整系統工作流（2026-08-07 更新）</h3>
+    <p>完整端到端流程（Cron → 註冊 → 匯入 → 監控 → 智能調度）請見獨立頁面：</p>
+    <ul class="body-list">
+      <li>📄 <a href="https://forumdata-collab.github.io/grok-api-pool-guide/registration-workflow.html" style="color:var(--teal)">完整註冊與系統工作流（含 16 步驟 + 智能工具鏈）</a></li>
+    </ul>
+    <div class="tip"><strong>2026-08-07 實測更新</strong>：<br>
+      ① 已停止匯入 web 帳戶（DC IP 被 anti-bot 擋死，僅保留 console）——<code>grok-pool-register.sh</code> 只呼叫 <code>/accounts/console/import</code>。<br>
+      ② 確認 <code>grok-4.3</code> 受 <strong>Team Fingerprint RPM 硬鎖</strong>（~60/min，log 關鍵字 <code>upstream_team_model_rate_limited</code>）——加帳戶無法突破，需靠隊列整形 + 降級鏈。<br>
+      ③ 確認 grok2api <strong>原生支援 tool-calling</strong>（OpenAI <code>tools</code> 透傳）——Hermes 可直接驅動池做真 agent。<br>
+      ④ 新增智能工具鏈：<code>smart_gateway.py</code>（熔斷 + 速率整形 + 降級鏈）、<code>poc_agent.py</code>（端到端 ReAct）、<code>gateway_monitor.py</code>（429 監控）、<code>verify_phase1.py</code>（驗收測試）。</div>
   </div>
 
   <div class="section" id="appendix-tg">
