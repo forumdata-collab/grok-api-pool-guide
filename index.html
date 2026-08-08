@@ -983,6 +983,7 @@ fi</code></pre></div>
         <li><a href="#appendix-register">附錄 B：帳戶自動化註冊實戰</a></li>
         <li><a href="#appendix-tg">附錄 C：将 Grok API Key 接入 Telegram 的注意事项</a></li>
         <li><a href="#appendix-monitor">附錄 D：监控与告警实战（零 API 成本）</a></li>
+        <li><a href="#appendix-media">附錄 E：免費生成圖像與影片（Console Route 實戰）</a></li>
       </ul>
       </div>
 
@@ -1191,9 +1192,72 @@ accounts:
     <div class="tip yellow"><strong>⚠️ 安全提醒</strong>：collector / watchdog 脚本内含管理密码与本地路径，<strong>切勿原样发布到公开仓库</strong>；本文档所有示例均已使用占位符。仪表板数据经 nginx 公开，status.json 不包含任何密钥。</div>
   </div>
 
+  <div class="section" id="appendix-media">
+    <h2>附錄 E：免費生成圖像與影片（Console Route 實戰）</h2>
+    <p class="intro">Grok 免費帳戶除聊天外，還附帶 <strong>Imagine 圖像（5/日）與影片（2/日）配額</strong>，經 Console 帳戶池（79 帳戶）可達每日 <strong>~395 張圖 / ~158 段片</strong>，全部 $0。2026-08-08 實測。關鍵在於路由必須走 <code>Console/</code> 前綴——默認的 <code>grok-imagine-image</code> 會路由到 Web 帳戶（datacenter IP 被 anti-bot 擋 → 502 <code>upstream_unavailable</code>）。</p>
+
+    <h3>1. 免費配額總覽</h3>
+    <table>
+      <thead><tr><th>能力</th><th>Model（必須 Console/ 前綴）</th><th>每帳戶/日</th><th>79 帳戶池</th></tr></thead>
+      <tbody>
+        <tr><td>Chat</td><td><code>Console/grok-4.3</code></td><td>10 請求</td><td>790 請求</td></tr>
+        <tr><td>Image</td><td><code>Console/grok-imagine-image</code></td><td>5 張</td><td>395 張</td></tr>
+        <tr><td>Image→Video</td><td><code>Console/grok-imagine-video</code></td><td>2 段</td><td>158 段</td></tr>
+      </tbody>
+    </table>
+
+    <h3>2. 生圖（OpenAI 兼容）</h3>
+    <div class="code-wrap"><div class="code-head"><span>POST /v1/images/generations</span><button class="copy-btn">复制</button></div>
+<pre>curl -X POST https://your-domain/v1/images/generations \
+  -H "Authorization: Bearer YOUR_GROK_API_KEY" -H "Content-Type: application/json" -d '{
+    "model": "Console/grok-imagine-image",   ← 必须 Console/ 前缀
+    "prompt": "Tokyo alley, film look, 8k",
+    "size": "1024x1536",                     ← 2:3 直向; 1:1=1024x1024
+    "n": 1
+  }'</pre></div>
+
+    <h3>3. 生片（Image-to-Video）</h3>
+    <div class="code-wrap"><div class="code-head"><span>POST /v1/videos/generations</span><button class="copy-btn">复制</button></div>
+<pre>curl -X POST https://your-domain/v1/videos/generations \
+  -H "Authorization: Bearer YOUR_GROK_API_KEY" -H "Content-Type: application/json" -d '{
+    "model": "Console/grok-imagine-video",
+    "prompt": "woman walks then jumps, slow motion",
+    "image": {"url": "data:image/jpeg;base64,<BASE64>"},   ← 必须 HTTPS 或 data URL
+    "aspect_ratio": "2:3"                                  ← 关键! 否则固定 16:9 会压扁直向图
+  }'
+# 返回 {"request_id":"video_xxx"} → 轮询状态
+curl "https://your-domain/v1/videos/video_xxx" -H "Authorization: Bearer YOUR_GROK_API_KEY"
+# {"status":"done","video":{"url":".../v1/videos/video_xxx/content"}} → 下载
+curl "https://your-domain/v1/videos/video_xxx/content" -H "Authorization: Bearer YOUR_GROK_API_KEY" -o out.mp4</pre></div>
+
+    <h3>4. 踩坑清單（全部實測驗證）</h3>
+    <ul>
+      <li><strong>必須 <code>Console/</code> 前綴</strong>：無前綴 → Web route → DC IP 502 <code>upstream_unavailable</code>。</li>
+      <li><strong>Video 的 image 必須 HTTPS 或 data URL</strong>：本地 <code>http://127.0.0.1</code> 會被拒（<code>视频首图必须是 HTTPS URL 或 image data URL</code>）。用 <code>base64 -w0 img.png</code> 轉 data URL。</li>
+      <li><strong><code>aspect_ratio</code> 必填</strong>：默認輸出 16:9（1280×720），直向圖（2:3）會被強行壓扁；指定 <code>"2:3"</code> → 720×1088 正常。</li>
+      <li><strong>Video 下載要帶 Bearer header</strong>：<code>/content</code> 端點無 header 返回 401 <code>invalid_api_key</code>。</li>
+      <li><strong>回應 URL 端口錯</strong>：內部 URL 可能寫死 <code>:8000</code>，本機實際端口不同時替換即可。</li>
+      <li><strong>監察配額必須按 mode 過濾</strong>：admin API 的 <code>quotaWindows</code> 每個帳戶有 console / console_image / console_video 三個窗口；統計「可用聊天配額」時只加 <code>mode=='console'</code>，否則 image/video 滿配額會混入，造成「有額度卻 429」的假象。</li>
+    </ul>
+
+    <h3>5. 一鍵腳本 grok_gen.py（生圖/生片）</h3>
+    <div class="code-wrap"><div class="code-head"><span>grok_gen.py（片段，完整版見本指南源倉）</span><button class="copy-btn">复制</button></div>
+<pre>用法:
+  python3 grok_gen.py image "prompt" [-ar 2:3|16:9|1:1|9:16] [-o out.png]
+  python3 grok_gen.py video "動作描述" [-i input.png] [-ar 2:3] [-o out.mp4]
+
+核心邏輯（關鍵三行）:
+  body = {"model": "Console/grok-imagine-image", "prompt": prompt, "size": sizes.get(ar)}
+  body = {"model": "Console/grok-imagine-video", "prompt": prompt,
+          "image": {"url": "data:...;base64,..."}, "aspect_ratio": ar}
+  # video 下载: urllib Request 带 Authorization header → /videos/{id}/content</pre></div>
+
+    <div class="tip"><strong>💡 提示</strong>：所有請求走 OpenAI 兼容端點（<code>/v1/images/generations</code>、<code>/v1/videos/generations</code>），可直接接入現有 OpenAI SDK；配額每日 UTC 窗口重置，79 帳戶 staggered 輪換。腳本已整合入 <code>~/grok-pool/tools/grok_gen.py</code>。</div>
+  </div>
+
   <div class="footer">
     <p>Grok API Pool 部署指南 · 实战踩坑笔记 · MIT License · <a href="https://docs.x.ai" target="_blank" rel="noopener">xAI Docs</a></p>
-    <p style="margin-top:4px">最后实测：2026-08-06 · 所有敏感数据均已占位符化，请自行替换</p>
+    <p style="margin-top:4px">最后实测：2026-08-08 · 所有敏感数据均已占位符化，请自行替换</p>
     <div class="kofi-bar">
       <p>喜欢这份指南？请我饮杯咖啡 ☕</p>
       <a href="https://ko-fi.com/forumdata" target="_blank" rel="noopener">☕ 请我饮咖啡</a>
