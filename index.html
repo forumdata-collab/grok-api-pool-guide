@@ -1005,7 +1005,7 @@ fi</code></pre></div>
   <!-- 附錄 B：帳戶自動化註冊實戰 -->
   <div id="appendix-register" class="section">
     <h2>附錄 B：帳戶自動化註冊實戰</h2>
-    <p class="intro">本附錄補充「如何有效自動創建 Grok 帳戶」及建議頻率，供需要長期維持池規模的使用者參考。所有指令與腳本均以 2026-08-06 實測為準。</p>
+    <p class="intro">本附錄補充「如何有效自動創建 Grok 帳戶」及建議頻率。所有指令與腳本均以實測為準。<strong>完整 16 步驟流程 + 智能工具鏈已收錄於獨立頁面：</strong>📄 <a href="https://forumdata-collab.github.io/grok-api-pool-guide/registration-workflow.html" style="color:var(--teal)">完整註冊與系統工作流</a>（本頁只保留精華摘要，避免雙線維護）。</p>
 
     <h3 class="sub">B.1 每日兩批註冊機制</h3>
     <ul class="body-list">
@@ -1018,7 +1018,7 @@ fi</code></pre></div>
       <div class="code-head"><span>~/.hermes/scripts/grok-pool-batch.sh</span><button class="copy-btn">复制</button></div>
       <pre><code>#!/bin/bash
 # 由 Hermes cron 呼叫，預設每批 5 個
-exec /home/ubuntu/grok-pool/cron-batch.sh "${@:-5}"</code></pre>
+exec ~/grok-pool/cron-batch.sh "${@:-5}"</code></pre>
     </div>
 
     <h3 class="sub">B.2 重要修復與踩坑</h3>
@@ -1257,7 +1257,7 @@ curl "https://your-domain/v1/videos/video_xxx/content" -H "Authorization: Bearer
 
   <div class="footer">
     <p>Grok API Pool 部署指南 · 实战踩坑笔记 · MIT License · <a href="https://docs.x.ai" target="_blank" rel="noopener">xAI Docs</a></p>
-    <p style="margin-top:4px">最后实测：2026-08-08 · 所有敏感数据均已占位符化，请自行替换</p>
+    <p style="margin-top:4px">最后实测 2026-08-08 · Last updated: 2026-08-15 · 所有敏感数据均已占位符化，请自行替换</p>
     <div class="kofi-bar">
       <p>喜欢这份指南？请我饮杯咖啡 ☕</p>
       <a href="https://ko-fi.com/forumdata" target="_blank" rel="noopener">☕ 请我饮咖啡</a>
