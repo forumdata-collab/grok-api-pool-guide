@@ -1,0 +1,30 @@
+name: Check (secret leak + placeholder consistency)
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check for leaked real API keys
+        run: |
+          if grep -rnE "sk-[a-zA-Z0-9]{20,}" . \
+              --include="*.html" --include="*.md" \
+              --include="*.py" --include="*.yaml" --include="*.yml" --include="*.env" ; then
+            echo "::error::Potential real API key found!"
+            exit 1
+          fi
+          echo "✅ No leaked keys detected"
+
+      - name: Check .env is not tracked
+        run: |
+          if [ -f .env ]; then
+            echo "::error::.env must never be committed"
+            exit 1
+          fi
+          echo "✅ No .env in repo"
